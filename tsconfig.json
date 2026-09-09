@@ -34,11 +34,13 @@
     ".next-app/types/**/*.ts",
     ".next-build/types/**/*.ts",
     ".next-fresh/types/**/*.ts",
+    ".next-origin2/types/**/*.ts",
     ".next-run/types/**/*.ts",
     ".next-sess/types/**/*.ts",
+    ".next-share/types/**/*.ts",
     ".next/types/**/*.ts",
     "next-env.d.ts",
-    ".next-share/types/**/*.ts"
+    ".next-ban/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

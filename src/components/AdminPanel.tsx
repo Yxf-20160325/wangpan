@@ -20,13 +20,13 @@ import {
   IconTrash,
   IconUser,
 } from './Icons';
-import SettingsTab from './AdminSettings';
+import { UsersTab, SettingsTab } from './AdminSettings';
 import { formatSize, formatTime } from '@/lib/format';
 import { kindOf } from '@/lib/fileKind';
 import { api } from '@/lib/clientApi';
 import type { FSNodeView } from '@/lib/types';
 
-type Tab = 'overview' | 'files' | 'logs' | 'sessions' | 'settings' | 'shares';
+type Tab = 'overview' | 'files' | 'logs' | 'sessions' | 'shares' | 'users' | 'settings';
 
 interface AdminItem extends FSNodeView {
   path: string;
@@ -91,7 +91,8 @@ const MENU: { key: Tab; label: string; icon: typeof IconChart }[] = [
   { key: 'logs', label: '操作日志', icon: IconShield },
   { key: 'sessions', label: '登录会话', icon: IconMonitor },
   { key: 'shares', label: '分享管理', icon: IconShare },
-  { key: 'settings', label: '用户与设置', icon: IconSettings },
+  { key: 'users', label: '用户', icon: IconUser },
+  { key: 'settings', label: '设置', icon: IconSettings },
 ];
 
 export default function AdminPanel({ user }: { user: string }) {
@@ -103,6 +104,7 @@ export default function AdminPanel({ user }: { user: string }) {
   const [users, setUsers] = useState<UserItem[]>([]);
   const [accounts, setAccounts] = useState<string[]>([]);
   const [allowRegister, setAllowRegister] = useState(true);
+  const [allowLogin, setAllowLogin] = useState(true);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState<{ text: string; ok: boolean } | null>(null);
 
@@ -128,6 +130,7 @@ export default function AdminPanel({ user }: { user: string }) {
       setOv(o ?? null);
       setUsers(u.users ?? []);
       setAllowRegister(u.settings?.allowRegister !== false);
+      setAllowLogin(u.settings?.allowLogin !== false);
     } catch {
       notify('加载失败', false);
     } finally {
@@ -235,11 +238,12 @@ export default function AdminPanel({ user }: { user: string }) {
           {tab === 'logs' && <LogsTab logs={logs} onReload={load} notify={notify} />}
           {tab === 'sessions' && <SessionsTab sessions={sessions} onReload={load} notify={notify} />}
           {tab === 'shares' && <SharesTab notify={notify} onReload={load} />}
+          {tab === 'users' && <UsersTab users={users} current={user} onReload={load} notify={notify} />}
           {tab === 'settings' && (
             <SettingsTab
               user={user}
-              users={users}
               allowRegister={allowRegister}
+              allowLogin={allowLogin}
               onReload={load}
               notify={notify}
             />

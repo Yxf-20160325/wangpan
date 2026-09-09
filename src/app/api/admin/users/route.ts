@@ -1,13 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
   AuthError,
+  banUser,
   createUser,
   deleteUser,
   getSettings,
   listUsers,
+  normalizeBan,
   requireAdminRecord,
+  unbanUser,
   updateSettings,
   updateUser,
+  type AppSettings,
   type Role,
 } from '@/lib/auth';
 import { appendLog } from '@/lib/log';
@@ -25,7 +29,10 @@ export async function GET() {
   const users = await listUsers();
   const settings = await getSettings();
   return NextResponse.json({
-    users: users.map((u) => ({ id: u.id, username: u.username, role: u.role, createdAt: u.createdAt })),
+    users: users.map((u) => {
+      const ban = normalizeBan(u);
+      return { id: u.id, username: u.username, role: u.role, createdAt: u.createdAt, ...ban };
+    }),
     settings,
   });
 }
@@ -35,12 +42,15 @@ export async function POST(req: NextRequest) {
   if (!admin) return NextResponse.json({ error: '需要管理员权限' }, { status: 403 });
 
   const body = (await req.json().catch(() => ({}))) as {
-    action?: 'create' | 'update' | 'delete' | 'settings';
+    action?: 'create' | 'update' | 'delete' | 'settings' | 'ban' | 'unban';
     id?: string;
     username?: string;
     password?: string;
     role?: Role;
     allowRegister?: boolean;
+    allowLogin?: boolean;
+    reason?: string;
+    durationDays?: number;
   };
 
   try {
@@ -91,14 +101,42 @@ export async function POST(req: NextRequest) {
     }
 
     if (body.action === 'settings') {
-      const s = await updateSettings({ allowRegister: body.allowRegister !== false });
+      const patch: Partial<AppSettings> = {};
+      if (body.allowRegister !== undefined) patch.allowRegister = body.allowRegister;
+      if (body.allowLogin !== undefined) patch.allowLogin = body.allowLogin;
+      const s = await updateSettings(patch);
       appendLog({
         action: 'setting',
-        target: '注册开关',
-        detail: s.allowRegister ? '已开放注册' : '已关闭注册',
+        target: '访问设置',
+        detail: `注册${s.allowRegister ? '开放' : '关闭'} · 登录${s.allowLogin ? '开放' : '关闭'}`,
         user: admin.username,
       });
       return NextResponse.json({ ok: true, settings: s });
+    }
+
+    if (body.action === 'ban') {
+      if (!body.id) return NextResponse.json({ error: '缺少用户 id' }, { status: 400 });
+      if (body.id === admin.id) return NextResponse.json({ error: '不能封禁当前登录的账号' }, { status: 400 });
+      const dur = Math.max(0, Math.floor(body.durationDays ?? 0));
+      const user = await banUser(body.id, body.reason?.trim() || '', dur);
+      appendLog({
+        action: 'setting',
+        target: `封禁账号：${user.username}`,
+        detail: `${dur > 0 ? `${dur} 天` : '永久'} · ${body.reason?.trim() || '未说明原因'}`,
+        user: admin.username,
+      });
+      const ban = normalizeBan(user);
+      return NextResponse.json({
+        ok: true,
+        user: { id: user.id, username: user.username, role: user.role, ...ban },
+      });
+    }
+
+    if (body.action === 'unban') {
+      if (!body.id) return NextResponse.json({ error: '缺少用户 id' }, { status: 400 });
+      const user = await unbanUser(body.id);
+      appendLog({ action: 'setting', target: `解封账号：${user.username}`, detail: '', user: admin.username });
+      return NextResponse.json({ ok: true });
     }
 
     return NextResponse.json({ error: '未知操作' }, { status: 400 });

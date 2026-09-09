@@ -24,11 +24,19 @@ export interface UserRecord {
   /** 头像：data URL（base64 图片）或空（使用首字母占位） */
   avatar?: string;
   createdAt: string;
+  /** 是否已封禁 */
+  banned?: boolean;
+  /** 封禁原因 */
+  banReason?: string;
+  /** 封禁到期时间（ISO 字符串）；null/undefined 表示永久封禁 */
+  banExpiresAt?: string | null;
 }
 
 export interface AppSettings {
   /** 是否开放新用户注册 */
   allowRegister: boolean;
+  /** 是否开放登录；false 时所有账号（含管理员）都无法登录 */
+  allowLogin: boolean;
 }
 
 export async function sha256(text: string): Promise<string> {
@@ -44,9 +52,12 @@ export async function getSettings(): Promise<AppSettings> {
   try {
     const raw = await fsp.readFile(SETTINGS_FILE, 'utf8');
     const parsed = JSON.parse(raw) as Partial<AppSettings>;
-    return { allowRegister: parsed.allowRegister !== false };
+    return {
+      allowRegister: parsed.allowRegister !== false,
+      allowLogin: parsed.allowLogin !== false,
+    };
   } catch {
-    return { allowRegister: true };
+    return { allowRegister: true, allowLogin: true };
   }
 }
 
@@ -127,6 +138,49 @@ export async function verifyLogin(username: string, password: string): Promise<U
   const user = await findUser(username);
   if (!user) return null;
   return (await sha256(password)) === user.passwordHash ? user : null;
+}
+
+/** 当前是否处于有效封禁状态（永久封禁或限时封禁未到期都算） */
+export function isBannedNow(u: UserRecord): boolean {
+  if (!u.banned) return false;
+  if (u.banExpiresAt && Date.parse(u.banExpiresAt) <= Date.now()) return false;
+  return true;
+}
+
+/** 将封禁字段归一化为「当前有效」状态（限时已过则视为未封禁，避免残留标记） */
+export function normalizeBan(u: UserRecord): Pick<UserRecord, 'banned' | 'banReason' | 'banExpiresAt'> {
+  if (isBannedNow(u)) {
+    return { banned: true, banReason: u.banReason, banExpiresAt: u.banExpiresAt ?? null };
+  }
+  return { banned: false, banReason: undefined, banExpiresAt: undefined };
+}
+
+/** 封禁账号：永久（durationDays=0）或限时（N 天）；同时撤销其全部会话 */
+export async function banUser(id: string, reason: string, durationDays: number): Promise<UserRecord> {
+  const expiresAt = durationDays > 0 ? new Date(Date.now() + durationDays * 86_400_000).toISOString() : null;
+  const updated = await withUsers((users) => {
+    const user = users.find((u) => u.id === id);
+    if (!user) throw new AuthError('用户不存在');
+    user.banned = true;
+    user.banReason = reason || '违反使用规范';
+    user.banExpiresAt = expiresAt;
+    return { ...user };
+  });
+  const u = await findUser(updated.username);
+  if (u) await revokeByUser(u.username);
+  return updated;
+}
+
+/** 解封账号 */
+export async function unbanUser(id: string): Promise<UserRecord> {
+  return withUsers((users) => {
+    const user = users.find((u) => u.id === id);
+    if (!user) throw new AuthError('用户不存在');
+    user.banned = false;
+    user.banReason = undefined;
+    user.banExpiresAt = undefined;
+    return { ...user };
+  });
 }
 
 export class AuthError extends Error {}

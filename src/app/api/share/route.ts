@@ -14,6 +14,20 @@ interface ShareView extends ShareRecord {
   expired: boolean;
 }
 
+// 自动识别访问来源：优先取反向代理（如 Railway）下发的 x-forwarded-* 头，
+// 没有则退回 Host。这样 localhost 访问得到 http://localhost:3000，
+// 走公网域名得到 https://wangpan-production.up.railway.app，无需硬编码。
+function getRequestOrigin(req: NextRequest): string {
+  const forwardedHost = req.headers.get('x-forwarded-host');
+  const forwardedProto = (req.headers.get('x-forwarded-proto') || '').split(',')[0].trim();
+  const host = forwardedHost || req.headers.get('host');
+  if (!host) return new URL(req.url).origin;
+  const proto =
+    forwardedProto ||
+    (host.includes('localhost') || host.includes('127.0.0.1') ? 'http' : 'https');
+  return `${proto}://${host}`;
+}
+
 export async function POST(req: NextRequest) {
   const denied = await guardApi();
   if (denied) return denied;
@@ -40,7 +54,7 @@ export async function POST(req: NextRequest) {
   const rec = await createShare({ nodeId, owner: username, ttlDays: ttl });
   if (!rec) return NextResponse.json({ error: '分享失败' }, { status: 500 });
 
-  const origin = new URL(req.url).origin;
+  const origin = getRequestOrigin(req);
   return NextResponse.json({
     id: rec.id,
     url: `${origin}/share/${rec.id}`,
@@ -75,7 +89,7 @@ export async function GET(req: NextRequest) {
 
   // 按 nodeId 过滤（只看某个文件的分享）
   const filtered = nodeId ? views.filter((v) => v.nodeId === nodeId) : views;
-  const origin = new URL(req.url).origin;
+  const origin = getRequestOrigin(req);
 
   return NextResponse.json({
     shares: filtered.map((v) => ({ ...v, url: `${origin}/share/${v.id}` })),

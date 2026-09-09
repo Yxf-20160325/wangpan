@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyLogin } from '@/lib/auth';
+import { getSettings, isBannedNow, verifyLogin } from '@/lib/auth';
 import { appendLog } from '@/lib/log';
 import { SESSION_COOKIE, SESSION_TTL_MS, createToken } from '@/lib/session';
 import { createSession } from '@/lib/session-store';
@@ -19,6 +19,24 @@ export async function POST(req: NextRequest) {
   if (!user) {
     appendLog({ action: 'login', target: username, detail: '账号或密码错误', result: 'fail', user: username });
     return NextResponse.json({ error: '账号或密码错误' }, { status: 401 });
+  }
+
+  const settings = await getSettings();
+  if (!settings.allowLogin) {
+    appendLog({ action: 'login', target: username, detail: '登录功能已关闭', result: 'fail', user: username });
+    return NextResponse.json({ error: '登录功能已暂时关闭，请联系管理员', code: 'LOGIN_DISABLED' }, { status: 403 });
+  }
+
+  if (isBannedNow(user)) {
+    const until = user.banExpiresAt
+      ? `，预计解封时间 ${new Date(user.banExpiresAt).toLocaleString('zh-CN')}`
+      : '（永久封禁）';
+    const reason = user.banReason || '未说明';
+    appendLog({ action: 'login', target: username, detail: `账号被封禁：${reason}`, result: 'fail', user: username });
+    return NextResponse.json(
+      { error: `账号已被封禁${until}，原因：${reason}`, code: 'BANNED' },
+      { status: 403 },
+    );
   }
 
   const ip =
