@@ -7,6 +7,8 @@ import { NextResponse } from 'next/server';
 import { ROOT_DIR } from './store';
 import { SESSION_COOKIE, verifyToken } from './session';
 import { getSession, revokeByUser, type SessionRecord } from './session-store';
+import type { PermissionKey } from './permissions';
+import { ALL_PERMISSIONS } from './permissions';
 
 export const DEFAULT_USERNAME = process.env.ADMIN_USER || 'admin';
 export const DEFAULT_PASSWORD = process.env.ADMIN_PASSWORD || 'Yxf20160325';
@@ -30,6 +32,8 @@ export interface UserRecord {
   banReason?: string;
   /** 封禁到期时间（ISO 字符串）；null/undefined 表示永久封禁 */
   banExpiresAt?: string | null;
+  /** 管理面板细粒度权限点；仅 role==='admin' 时生效。undefined/空 视为拥有全部权限（兼容老账号）。 */
+  permissions?: PermissionKey[];
 }
 
 export interface AppSettings {
@@ -155,6 +159,25 @@ export function normalizeBan(u: UserRecord): Pick<UserRecord, 'banned' | 'banRea
   return { banned: false, banReason: undefined, banExpiresAt: undefined };
 }
 
+/**
+ * 计算用户「实际拥有的权限点」。
+ * - 非管理员：空（无法进入管理面板）。
+ * - 管理员但 permissions 为空 / 未设置：视为拥有全部权限（兼容老账号）。
+ * - 管理员且设置了 permissions：以设置为准（过滤掉未知的脏数据）。
+ */
+export function effectivePermissions(u: UserRecord): PermissionKey[] {
+  if (u.role !== 'admin') return [];
+  if (!u.permissions || u.permissions.length === 0) return [...ALL_PERMISSIONS];
+  const allow = new Set<string>(ALL_PERMISSIONS);
+  return u.permissions.filter((p) => allow.has(p));
+}
+
+/** 当前用户是否拥有某权限点（含角色与封禁判断） */
+export function hasPerm(u: UserRecord, key: PermissionKey): boolean {
+  if (isBannedNow(u)) return false;
+  return effectivePermissions(u).includes(key);
+}
+
 /** 封禁账号：永久（durationDays=0）或限时（N 天）；同时撤销其全部会话 */
 export async function banUser(id: string, reason: string, durationDays: number): Promise<UserRecord> {
   const expiresAt = durationDays > 0 ? new Date(Date.now() + durationDays * 86_400_000).toISOString() : null;
@@ -189,6 +212,7 @@ export async function createUser(input: {
   username: string;
   password: string;
   role?: Role;
+  permissions?: PermissionKey[];
 }): Promise<UserRecord> {
   const username = input.username.trim();
   if (username.length < 2 || username.length > 24) throw new AuthError('用户名长度需在 2-24 个字符之间');
@@ -200,12 +224,18 @@ export async function createUser(input: {
     throw new AuthError('该用户名已被注册');
   }
 
+  const role = input.role ?? 'user';
+  // 普通用户无管理面板权限；管理员默认全权，除非显式指定
+  const permissions =
+    role === 'user' ? [] : input.permissions?.length ? input.permissions.filter((p) => ALL_PERMISSIONS.includes(p)) : [...ALL_PERMISSIONS];
+
   const record: UserRecord = {
     id: randomUUID(),
     username,
     passwordHash: await sha256(input.password),
-    role: input.role ?? 'user',
+    role,
     createdAt: new Date().toISOString(),
+    permissions,
   };
 
   await withUsers((u) => {
@@ -216,7 +246,7 @@ export async function createUser(input: {
 
 export async function updateUser(
   id: string,
-  patch: { username?: string; password?: string; role?: Role },
+  patch: { username?: string; password?: string; role?: Role; permissions?: PermissionKey[] },
 ): Promise<UserRecord> {
   const hash = patch.password ? await sha256(patch.password) : null;
 
@@ -233,12 +263,30 @@ export async function updateUser(
       user.username = name;
     }
     if (hash) user.passwordHash = hash;
+
+    // 角色变更：同步权限（普通用户无管理权限；管理员默认全权）
     if (patch.role !== undefined && patch.role !== user.role) {
       if (user.role === 'admin' && users.filter((u) => u.role === 'admin').length <= 1) {
         throw new AuthError('至少需要保留一个管理员');
       }
       user.role = patch.role;
+      user.permissions = patch.role === 'user' ? [] : patch.permissions?.length ? patch.permissions.filter((p) => ALL_PERMISSIONS.includes(p)) : [...ALL_PERMISSIONS];
+    } else if (patch.permissions !== undefined && user.role === 'admin') {
+      // 角色未变但显式调整权限（仅对管理员有意义）
+      user.permissions = patch.permissions.length ? patch.permissions.filter((p) => ALL_PERMISSIONS.includes(p)) : [];
     }
+
+    return { ...user };
+  });
+}
+
+/** 单独设置某用户的权限点（用于「管理用户权限」）。仅对管理员生效，普通用户强制为空。 */
+export async function setUserPermissions(id: string, permissions: PermissionKey[]): Promise<UserRecord> {
+  return withUsers((users) => {
+    const user = users.find((u) => u.id === id);
+    if (!user) throw new AuthError('用户不存在');
+    const next = permissions.filter((p) => ALL_PERMISSIONS.includes(p));
+    user.permissions = user.role === 'admin' ? next : [];
     return { ...user };
   });
 }
@@ -396,4 +444,24 @@ export async function guardAdminApi(): Promise<{ session: SessionRecord } | Next
     return NextResponse.json({ error: '需要管理员权限' }, { status: 403 });
   }
   return { session };
+}
+
+/**
+ * 细粒度权限守卫：需为管理员且拥有指定权限点，否则返回 401/403。
+ * 返回 `{ rec }`（当前用户记录）以便路由使用其 username 等字段。
+ */
+export async function requirePermission(
+  key: PermissionKey,
+): Promise<{ rec: UserRecord } | NextResponse> {
+  const rec = await currentUserRecord();
+  if (!rec) {
+    return NextResponse.json({ error: '未登录或会话已失效', code: 'UNAUTHORIZED' }, { status: 401 });
+  }
+  if (rec.role !== 'admin') {
+    return NextResponse.json({ error: '需要管理员权限' }, { status: 403 });
+  }
+  if (!hasPerm(rec, key)) {
+    return NextResponse.json({ error: '无权限执行此操作', code: 'FORBIDDEN' }, { status: 403 });
+  }
+  return { rec };
 }

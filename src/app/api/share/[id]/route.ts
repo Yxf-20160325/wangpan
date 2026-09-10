@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { currentSession, guardApi } from '@/lib/auth';
+import { currentSession, currentUserRecord, guardApi, hasPerm } from '@/lib/auth';
 import { collectSubtree, getPath, getShare, readDb, revokeShare } from '@/lib/store';
 
 export const dynamic = 'force-dynamic';
@@ -53,10 +53,17 @@ export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: stri
   const db = await readDb();
   const share = db.shares.find((s) => s.id === id);
   if (!share) return NextResponse.json({ error: '分享不存在' }, { status: 404 });
-  if (session?.role !== 'admin' && share.owner !== session?.username) {
-    return NextResponse.json({ error: '无权撤销该分享' }, { status: 403 });
+
+  const isOwner = share.owner === session?.username;
+  if (!isOwner) {
+    // 仅管理员可撤销他人分享，且需持有 shares:revoke 权限
+    if (session?.role !== 'admin') return NextResponse.json({ error: '无权撤销该分享' }, { status: 403 });
+    const rec = await currentUserRecord();
+    if (!rec || !hasPerm(rec, 'shares:revoke')) {
+      return NextResponse.json({ error: '无权限撤销分享链接', code: 'FORBIDDEN' }, { status: 403 });
+    }
   }
 
-  const removed = await revokeShare(id, session?.role === 'admin' ? undefined : session?.username);
+  const removed = await revokeShare(id, isOwner ? session?.username : undefined);
   return NextResponse.json({ removed });
 }

@@ -4,45 +4,63 @@ import {
   banUser,
   createUser,
   deleteUser,
+  effectivePermissions,
   getSettings,
   listUsers,
   normalizeBan,
-  requireAdminRecord,
+  requirePermission,
+  setUserPermissions,
   unbanUser,
   updateSettings,
   updateUser,
   type AppSettings,
   type Role,
 } from '@/lib/auth';
+import { isPermissionKey, type PermissionKey } from '@/lib/permissions';
 import { appendLog } from '@/lib/log';
 
 export const dynamic = 'force-dynamic';
 
-async function guard() {
-  const admin = await requireAdminRecord();
-  if (!admin) return null;
-  return admin;
+/** 操作 -> 所需权限点 */
+const ACTION_PERM: Record<string, PermissionKey> = {
+  create: 'users:create',
+  update: 'users:edit',
+  delete: 'users:delete',
+  ban: 'users:ban',
+  unban: 'users:ban',
+  permissions: 'users:permissions',
+  settings: 'settings:access',
+};
+
+function sanitizePerms(input: unknown): PermissionKey[] | undefined {
+  if (!Array.isArray(input)) return undefined;
+  return input.filter(isPermissionKey);
 }
 
 export async function GET() {
-  if (!(await guard())) return NextResponse.json({ error: '需要管理员权限' }, { status: 403 });
+  const guard = await requirePermission('users:view');
+  if (guard instanceof NextResponse) return guard;
   const users = await listUsers();
   const settings = await getSettings();
   return NextResponse.json({
     users: users.map((u) => {
       const ban = normalizeBan(u);
-      return { id: u.id, username: u.username, role: u.role, createdAt: u.createdAt, ...ban };
+      return {
+        id: u.id,
+        username: u.username,
+        role: u.role,
+        createdAt: u.createdAt,
+        permissions: effectivePermissions(u),
+        ...ban,
+      };
     }),
     settings,
   });
 }
 
 export async function POST(req: NextRequest) {
-  const admin = await guard();
-  if (!admin) return NextResponse.json({ error: '需要管理员权限' }, { status: 403 });
-
   const body = (await req.json().catch(() => ({}))) as {
-    action?: 'create' | 'update' | 'delete' | 'settings' | 'ban' | 'unban';
+    action?: string;
     id?: string;
     username?: string;
     password?: string;
@@ -51,7 +69,15 @@ export async function POST(req: NextRequest) {
     allowLogin?: boolean;
     reason?: string;
     durationDays?: number;
+    permissions?: unknown;
   };
+
+  const perm = body.action ? ACTION_PERM[body.action] : undefined;
+  if (!perm) return NextResponse.json({ error: '未知操作' }, { status: 400 });
+
+  const guard = await requirePermission(perm);
+  if (guard instanceof NextResponse) return guard;
+  const admin = guard.rec;
 
   try {
     if (body.action === 'create') {
@@ -59,6 +85,7 @@ export async function POST(req: NextRequest) {
         username: body.username ?? '',
         password: body.password ?? '',
         role: body.role ?? 'user',
+        permissions: sanitizePerms(body.permissions),
       });
       appendLog({
         action: 'setting',
@@ -66,7 +93,10 @@ export async function POST(req: NextRequest) {
         detail: `由 ${admin.username} 创建，角色：${user.role === 'admin' ? '管理员' : '普通用户'}`,
         user: admin.username,
       });
-      return NextResponse.json({ ok: true, user: { id: user.id, username: user.username, role: user.role } });
+      return NextResponse.json({
+        ok: true,
+        user: { id: user.id, username: user.username, role: user.role, permissions: effectivePermissions(user) },
+      });
     }
 
     if (body.action === 'update') {
@@ -82,7 +112,30 @@ export async function POST(req: NextRequest) {
         detail: `由 ${admin.username} 修改${body.password ? '（含密码重置）' : ''}`,
         user: admin.username,
       });
-      return NextResponse.json({ ok: true, user: { id: user.id, username: user.username, role: user.role } });
+      return NextResponse.json({
+        ok: true,
+        user: { id: user.id, username: user.username, role: user.role, permissions: effectivePermissions(user) },
+      });
+    }
+
+    if (body.action === 'permissions') {
+      if (!body.id) return NextResponse.json({ error: '缺少用户 id' }, { status: 400 });
+      // 禁止管理员修改自己的权限，避免把自己锁死在管理入口之外
+      if (body.id === admin.id) {
+        return NextResponse.json({ error: '不能修改当前登录账号的权限' }, { status: 400 });
+      }
+      const perms = sanitizePerms(body.permissions) ?? [];
+      const user = await setUserPermissions(body.id, perms);
+      appendLog({
+        action: 'setting',
+        target: `设置权限：${user.username}`,
+        detail: `由 ${admin.username} 调整为 ${perms.length} 项权限`,
+        user: admin.username,
+      });
+      return NextResponse.json({
+        ok: true,
+        user: { id: user.id, username: user.username, role: user.role, permissions: effectivePermissions(user) },
+      });
     }
 
     if (body.action === 'delete') {
@@ -128,7 +181,7 @@ export async function POST(req: NextRequest) {
       const ban = normalizeBan(user);
       return NextResponse.json({
         ok: true,
-        user: { id: user.id, username: user.username, role: user.role, ...ban },
+        user: { id: user.id, username: user.username, role: user.role, permissions: effectivePermissions(user), ...ban },
       });
     }
 

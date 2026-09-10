@@ -32,6 +32,7 @@
     "**/*.ts",
     "**/*.tsx",
     ".next-app/types/**/*.ts",
+    ".next-ban/types/**/*.ts",
     ".next-build/types/**/*.ts",
     ".next-fresh/types/**/*.ts",
     ".next-origin2/types/**/*.ts",
@@ -40,7 +41,7 @@
     ".next-share/types/**/*.ts",
     ".next/types/**/*.ts",
     "next-env.d.ts",
-    ".next-ban/types/**/*.ts"
+    ".next-perm/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

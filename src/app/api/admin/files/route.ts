@@ -1,12 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { deleteNodes, getPath, readDb } from '@/lib/store';
 import { appendLog } from '@/lib/log';
-import { currentUser } from '@/lib/auth';
+import { currentUser, requirePermission } from '@/lib/auth';
 import { extOf } from '@/lib/format';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
+  const guard = await requirePermission('files:view');
+  if (guard instanceof NextResponse) return guard;
   const db = await readDb();
   const items = db.nodes.map((n) => ({
     ...n,
@@ -21,6 +23,8 @@ export async function GET() {
 }
 
 export async function DELETE(req: NextRequest) {
+  const guard = await requirePermission('files:delete');
+  if (guard instanceof NextResponse) return guard;
   const body = (await req.json().catch(() => ({}))) as { ids?: string[] };
   const ids = Array.isArray(body.ids) ? body.ids : [];
   if (!ids.length) return NextResponse.json({ error: '缺少 ids' }, { status: 400 });

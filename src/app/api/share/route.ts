@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { currentSession, guardApi } from '@/lib/auth';
+import { currentSession, guardApi, requirePermission } from '@/lib/auth';
 import { createShare, listShares, readDb } from '@/lib/store';
 import type { ShareRecord } from '@/lib/types';
 
@@ -71,6 +71,12 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const nodeId = searchParams.get('nodeId');
   const all = searchParams.get('all') === '1';
+
+  // 管理员「分享管理」列表（all=1）需要 shares:view 权限
+  if (all) {
+    const guard = await requirePermission('shares:view');
+    if (guard instanceof NextResponse) return guard;
+  }
 
   const db = await readDb();
   const shares = await listShares(all && session?.role === 'admin' ? undefined : session?.username);

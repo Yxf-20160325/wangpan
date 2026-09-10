@@ -25,6 +25,7 @@ import { formatSize, formatTime } from '@/lib/format';
 import { kindOf } from '@/lib/fileKind';
 import { api } from '@/lib/clientApi';
 import type { FSNodeView } from '@/lib/types';
+import { TAB_VIEW_PERMISSION, type PermissionKey } from '@/lib/permissions';
 
 type Tab = 'overview' | 'files' | 'logs' | 'sessions' | 'shares' | 'users' | 'settings';
 
@@ -71,6 +72,7 @@ interface UserItem {
   username: string;
   role: 'admin' | 'user';
   createdAt: string;
+  permissions?: PermissionKey[];
 }
 
 interface Overview {
@@ -95,7 +97,15 @@ const MENU: { key: Tab; label: string; icon: typeof IconChart }[] = [
   { key: 'settings', label: '设置', icon: IconSettings },
 ];
 
-export default function AdminPanel({ user }: { user: string }) {
+export default function AdminPanel({
+  user,
+  role,
+  permissions,
+}: {
+  user: string;
+  role: 'admin' | 'user';
+  permissions: PermissionKey[];
+}) {
   const [tab, setTab] = useState<Tab>('overview');
   const [items, setItems] = useState<AdminItem[]>([]);
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -107,6 +117,13 @@ export default function AdminPanel({ user }: { user: string }) {
   const [allowLogin, setAllowLogin] = useState(true);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState<{ text: string; ok: boolean } | null>(null);
+
+  // 当前登录用户是否拥有某权限点
+  const can = useCallback((k: PermissionKey) => permissions.includes(k), [permissions]);
+  // 根据权限过滤可见 tab（至少需要该 tab 的「查看」权限）
+  const visibleMenu = useMemo(() => MENU.filter((m) => can(TAB_VIEW_PERMISSION[m.key])), [can]);
+  // 若当前 tab 已不可见（如权限被收回），回退到第一个可见 tab
+  const safeTab: Tab = visibleMenu.some((m) => m.key === tab) ? tab : visibleMenu[0]?.key ?? 'overview';
 
   const notify = useCallback((text: string, ok = true) => {
     setToast({ text, ok });
@@ -174,14 +191,14 @@ export default function AdminPanel({ user }: { user: string }) {
         </div>
 
         <nav className="space-y-0.5">
-          {MENU.map((m) => {
+          {visibleMenu.map((m) => {
             const Icon = m.icon;
             return (
               <button
                 key={m.key}
                 onClick={() => setTab(m.key)}
                 className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors ${
-                  tab === m.key ? 'bg-slate-900 font-medium text-white' : 'text-slate-600 hover:bg-slate-100'
+                  safeTab === m.key ? 'bg-slate-900 font-medium text-white' : 'text-slate-600 hover:bg-slate-100'
                 }`}
               >
                 <Icon width={17} height={17} />
@@ -211,7 +228,7 @@ export default function AdminPanel({ user }: { user: string }) {
       <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <header className="flex items-center gap-3 border-b border-slate-200 bg-white px-5 py-3.5">
           <div>
-            <h1 className="text-[15px] font-semibold">{MENU.find((m) => m.key === tab)?.label}</h1>
+            <h1 className="text-[15px] font-semibold">{MENU.find((m) => m.key === safeTab)?.label}</h1>
             <p className="text-xs text-slate-400">
               {loading ? '加载中…' : `${items.length} 个节点 · ${logs.length} 条日志`}
             </p>
@@ -233,19 +250,20 @@ export default function AdminPanel({ user }: { user: string }) {
         </header>
 
         <div className="min-h-0 flex-1 overflow-auto p-5">
-          {tab === 'overview' && <OverviewTab ov={ov} />}
-          {tab === 'files' && <FilesTab items={items} accounts={accounts} onDelete={deleteItems} notify={notify} user={user} />}
-          {tab === 'logs' && <LogsTab logs={logs} onReload={load} notify={notify} />}
-          {tab === 'sessions' && <SessionsTab sessions={sessions} onReload={load} notify={notify} />}
-          {tab === 'shares' && <SharesTab notify={notify} onReload={load} />}
-          {tab === 'users' && <UsersTab users={users} current={user} onReload={load} notify={notify} />}
-          {tab === 'settings' && (
+          {safeTab === 'overview' && <OverviewTab ov={ov} />}
+          {safeTab === 'files' && <FilesTab items={items} accounts={accounts} onDelete={deleteItems} notify={notify} user={user} canDelete={can('files:delete')} />}
+          {safeTab === 'logs' && <LogsTab logs={logs} onReload={load} notify={notify} canClear={can('logs:clear')} />}
+          {safeTab === 'sessions' && <SessionsTab sessions={sessions} onReload={load} notify={notify} canKick={can('sessions:kick')} />}
+          {safeTab === 'shares' && <SharesTab notify={notify} onReload={load} canRevoke={can('shares:revoke')} />}
+          {safeTab === 'users' && <UsersTab users={users} current={user} onReload={load} notify={notify} can={can} />}
+          {safeTab === 'settings' && (
             <SettingsTab
               user={user}
               allowRegister={allowRegister}
               allowLogin={allowLogin}
               onReload={load}
               notify={notify}
+              can={can}
             />
           )}
         </div>
@@ -414,12 +432,14 @@ function FilesTab({
   onDelete,
   notify,
   user,
+  canDelete,
 }: {
   items: AdminItem[];
   accounts: string[];
   onDelete: (ids: string[]) => void;
   notify: (t: string, ok?: boolean) => void;
   user: string;
+  canDelete: boolean;
 }) {
   const [kw, setKw] = useState('');
   const [type, setType] = useState<'all' | 'file' | 'folder'>('all');
@@ -480,14 +500,15 @@ function FilesTab({
           ))}
         </select>
 
-        {selected.length > 0 ? (
+        {canDelete && selected.length > 0 && (
           <button
             className="btn bg-red-600 text-white hover:bg-red-700"
             onClick={() => setConfirm(selected)}
           >
             <IconTrash width={15} height={15} /> 删除所选（{selected.length}）
           </button>
-        ) : (
+        )}
+        {!(canDelete && selected.length > 0) && (
           <span className="text-sm text-slate-400">共 {list.length} 项</span>
         )}
       </div>
@@ -562,13 +583,15 @@ function FilesTab({
                           <IconDownload width={15} height={15} />
                         </button>
                       )}
-                      <button
-                        onClick={() => setConfirm([n.id])}
-                        className="rounded-lg p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600"
-                        title="删除"
-                      >
-                        <IconTrash width={15} height={15} />
-                      </button>
+                      {canDelete && (
+                        <button
+                          onClick={() => setConfirm([n.id])}
+                          className="rounded-lg p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600"
+                          title="删除"
+                        >
+                          <IconTrash width={15} height={15} />
+                        </button>
+                      )}
                     </span>
                   </td>
                 </tr>
@@ -607,10 +630,12 @@ function LogsTab({
   logs,
   onReload,
   notify,
+  canClear,
 }: {
   logs: LogEntry[];
   onReload: () => void;
   notify: (t: string, ok?: boolean) => void;
+  canClear: boolean;
 }) {
   const [kw, setKw] = useState('');
   const [result, setResult] = useState<'all' | 'ok' | 'fail'>('all');
@@ -661,9 +686,11 @@ function LogsTab({
         <button className="btn-outline ml-auto" onClick={onReload}>
           <IconRefresh width={15} height={15} /> 刷新
         </button>
-        <button className="btn-outline text-red-600 hover:bg-red-50" onClick={() => setConfirmClear(true)}>
-          <IconTrash width={15} height={15} /> 清空日志
-        </button>
+        {canClear && (
+          <button className="btn-outline text-red-600 hover:bg-red-50" onClick={() => setConfirmClear(true)}>
+            <IconTrash width={15} height={15} /> 清空日志
+          </button>
+        )}
       </div>
 
       <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
@@ -759,10 +786,12 @@ function SessionsTab({
   sessions,
   onReload,
   notify,
+  canKick,
 }: {
   sessions: SessionItem[];
   onReload: () => void;
   notify: (t: string, ok?: boolean) => void;
+  canKick: boolean;
 }) {
   const [kickId, setKickId] = useState<string | null>(null);
   const [kickOthers, setKickOthers] = useState(false);
@@ -807,13 +836,15 @@ function SessionsTab({
         >
           <IconRefresh width={15} height={15} /> 刷新
         </button>
-        <button
-          className="btn-outline text-red-600 hover:bg-red-50 disabled:opacity-40"
-          disabled={others.length === 0}
-          onClick={() => setKickOthers(true)}
-        >
-          <IconLogout width={15} height={15} /> 退出其他设备
-        </button>
+        {canKick && (
+          <button
+            className="btn-outline text-red-600 hover:bg-red-50 disabled:opacity-40"
+            disabled={others.length === 0}
+            onClick={() => setKickOthers(true)}
+          >
+            <IconLogout width={15} height={15} /> 退出其他设备
+          </button>
+        )}
       </div>
 
       {/* 当前会话 */}
@@ -822,7 +853,7 @@ function SessionsTab({
           <div className="mb-2 flex items-center gap-2 text-xs font-medium text-brand-700">
             <IconMonitor width={16} height={16} /> 当前登录（本设备）
           </div>
-          <SessionRow s={current} onKick={() => undefined} />
+          <SessionRow s={current} onKick={() => undefined} canKick={canKick} />
         </div>
       )}
 
@@ -837,7 +868,7 @@ function SessionsTab({
           <ul className="divide-y divide-slate-50">
             {others.map((s) => (
               <li key={s.id} className="flex items-center gap-3 px-4 py-3">
-                <SessionRow s={s} onKick={() => setKickId(s.id)} />
+                <SessionRow s={s} onKick={() => setKickId(s.id)} canKick={canKick} />
               </li>
             ))}
           </ul>
@@ -897,9 +928,11 @@ interface AdminShare {
 function SharesTab({
   notify,
   onReload,
+  canRevoke,
 }: {
   notify: (t: string, ok?: boolean) => void;
   onReload: () => void;
+  canRevoke: boolean;
 }) {
   const [shares, setShares] = useState<AdminShare[]>([]);
   const [loading, setLoading] = useState(true);
@@ -988,13 +1021,15 @@ function SharesTab({
                       >
                         <IconEye width={15} height={15} />
                       </a>
-                      <button
-                        onClick={() => setRevokeId(s.id)}
-                        className="rounded-lg p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600"
-                        title="撤销"
-                      >
-                        <IconTrash width={15} height={15} />
-                      </button>
+                      {canRevoke && (
+                        <button
+                          onClick={() => setRevokeId(s.id)}
+                          className="rounded-lg p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600"
+                          title="撤销"
+                        >
+                          <IconTrash width={15} height={15} />
+                        </button>
+                      )}
                     </span>
                   </td>
                 </tr>
@@ -1022,7 +1057,7 @@ function SharesTab({
   );
 }
 
-function SessionRow({ s, onKick }: { s: SessionItem; onKick: () => void }) {
+function SessionRow({ s, onKick, canKick }: { s: SessionItem; onKick: () => void; canKick: boolean }) {
   const { device, browser } = parseUA(s.ua);
   return (
     <>
@@ -1043,14 +1078,14 @@ function SessionRow({ s, onKick }: { s: SessionItem; onKick: () => void }) {
       </div>
       {s.current ? (
         <span className="rounded-md bg-emerald-50 px-2 py-1 text-xs text-emerald-600">本设备</span>
-      ) : (
+      ) : canKick ? (
         <button
           onClick={onKick}
           className="rounded-lg px-2.5 py-1.5 text-xs text-red-600 hover:bg-red-50"
         >
           退出登录
         </button>
-      )}
+      ) : null}
     </>
   );
 }

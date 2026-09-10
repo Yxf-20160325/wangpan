@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { getPath, readDb, usedBytes, QUOTA_BYTES } from '@/lib/store';
 import { getLogs } from '@/lib/log';
 import { extOf } from '@/lib/format';
-import { listUsers } from '@/lib/auth';
+import { listUsers, requirePermission } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -13,6 +13,8 @@ function pathOf(db: Awaited<ReturnType<typeof readDb>>, parentId: string | null)
 }
 
 export async function GET() {
+  const guard = await requirePermission('overview:view');
+  if (guard instanceof NextResponse) return guard;
   const db = await readDb();
   const files = db.nodes.filter((n) => n.type === 'file');
   const folders = db.nodes.filter((n) => n.type === 'folder');

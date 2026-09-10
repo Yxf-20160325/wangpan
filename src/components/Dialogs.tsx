@@ -28,6 +28,27 @@ function Shell({ title, onClose, children }: { title: string; onClose: () => voi
   );
 }
 
+export function Modal({
+  title,
+  onClose,
+  children,
+  footer,
+  size = 'md',
+}: {
+  title: string;
+  onClose: () => void;
+  children: React.ReactNode;
+  footer?: React.ReactNode;
+  size?: 'md' | 'lg';
+}) {
+  return (
+    <Shell title={title} onClose={onClose}>
+      <div className={size === 'lg' ? 'max-h-[70vh] overflow-auto' : ''}>{children}</div>
+      {footer && <div className="mt-5 flex justify-end gap-2">{footer}</div>}
+    </Shell>
+  );
+}
+
 export function NameDialog({
   title,
   label,

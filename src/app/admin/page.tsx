@@ -1,5 +1,5 @@
 import { redirect } from 'next/navigation';
-import { currentSession } from '@/lib/auth';
+import { currentSession, currentUserRecord, effectivePermissions } from '@/lib/auth';
 import { touchSession } from '@/lib/session-store';
 import AdminPanel from '@/components/AdminPanel';
 
@@ -9,7 +9,9 @@ export default async function AdminPage() {
   const session = await currentSession();
   if (!session) redirect('/login');
   if (session.role !== 'admin') redirect('/');
+  const rec = await currentUserRecord();
   touchSession(session.id);
 
-  return <AdminPanel user={session.username} />;
+  const permissions = rec ? effectivePermissions(rec) : [];
+  return <AdminPanel user={session.username} role="admin" permissions={permissions} />;
 }

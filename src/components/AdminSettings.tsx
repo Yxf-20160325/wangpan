@@ -1,16 +1,18 @@
 'use client';
 
 import { Fragment, useState } from 'react';
-import { ConfirmDialog } from './Dialogs';
+import { ConfirmDialog, Modal } from './Dialogs';
 import { IconAlert, IconTrash, IconUser } from './Icons';
 import { formatTime } from '@/lib/format';
 import { api } from '@/lib/clientApi';
+import { ALL_PERMISSIONS, PERMISSION_GROUPS, type PermissionKey } from '@/lib/permissions';
 
 interface UserItem {
   id: string;
   username: string;
   role: 'admin' | 'user';
   createdAt: string;
+  permissions?: PermissionKey[];
   banned?: boolean;
   banReason?: string;
   banExpiresAt?: string | null;
@@ -23,15 +25,17 @@ export function UsersTab({
   current,
   onReload,
   notify,
+  can,
 }: {
   users: UserItem[];
   current: string;
   onReload: () => void;
   notify: (t: string, ok?: boolean) => void;
+  can: (k: PermissionKey) => boolean;
 }) {
   return (
     <div className="max-w-3xl">
-      <UsersCard users={users} current={current} onReload={onReload} notify={notify} />
+      <UsersCard users={users} current={current} onReload={onReload} notify={notify} can={can} />
     </div>
   );
 }
@@ -41,13 +45,14 @@ function UsersCard({
   current,
   onReload,
   notify,
+  can,
 }: {
   users: UserItem[];
   current: string;
   onReload: () => void;
   notify: (t: string, ok?: boolean) => void;
+  can: (k: PermissionKey) => boolean;
 }) {
-  const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
   const [pwd, setPwd] = useState('');
   const [role, setRole] = useState<'admin' | 'user'>('user');
@@ -58,6 +63,9 @@ function UsersCard({
   const [banTarget, setBanTarget] = useState<UserItem | null>(null);
   const [banReason, setBanReason] = useState('');
   const [banDuration, setBanDuration] = useState<number>(0);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createPerms, setCreatePerms] = useState<PermissionKey[]>(ALL_PERMISSIONS);
+  const [permTarget, setPermTarget] = useState<UserItem | null>(null);
 
   const create = async () => {
     if (name.trim().length < 2) return notify('账号至少需要 2 个字符', false);
@@ -67,7 +75,13 @@ function UsersCard({
       const res = await api('/api/admin/users', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'create', username: name, password: pwd, role }),
+        body: JSON.stringify({
+          action: 'create',
+          username: name,
+          password: pwd,
+          role,
+          permissions: role === 'admin' ? createPerms : [],
+        }),
       });
       const d = await res.json().catch(() => ({}));
       if (!res.ok) return notify(d.error || '创建失败', false);
@@ -75,11 +89,25 @@ function UsersCard({
       setName('');
       setPwd('');
       setRole('user');
-      setOpen(false);
+      setCreatePerms(ALL_PERMISSIONS);
+      setCreateOpen(false);
       onReload();
     } finally {
       setBusy(false);
     }
+  };
+
+  const savePerms = async (u: UserItem) => {
+    const res = await api('/api/admin/users', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'permissions', id: u.id, permissions: u.permissions ?? [] }),
+    });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) return notify(d.error || '保存失败', false);
+    notify(`已更新 ${u.username} 的权限`);
+    setPermTarget(null);
+    onReload();
   };
 
   const setUserRole = async (u: UserItem, next: 'admin' | 'user') => {
@@ -161,41 +189,12 @@ function UsersCard({
           <h2 className="text-sm font-semibold text-slate-800">用户管理</h2>
           <p className="mt-0.5 text-xs text-slate-400">共 {users.length} 个账号</p>
         </div>
-        <button className="btn-primary" onClick={() => setOpen((v) => !v)}>
-          <IconUser width={15} height={15} /> 新建账号
-        </button>
+        {can('users:create') && (
+          <button className="btn-primary" onClick={() => setCreateOpen(true)}>
+            <IconUser width={15} height={15} /> 新建账号
+          </button>
+        )}
       </div>
-
-      {open && (
-        <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50/70 p-4">
-          <div className="grid gap-3 sm:grid-cols-[1fr_1fr_auto_auto]">
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="新账号"
-              className="rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-brand-500"
-            />
-            <input
-              value={pwd}
-              onChange={(e) => setPwd(e.target.value)}
-              type="password"
-              placeholder="初始密码（≥6 位）"
-              className="rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-brand-500"
-            />
-            <select
-              value={role}
-              onChange={(e) => setRole(e.target.value as 'admin' | 'user')}
-              className="rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm outline-none focus:border-brand-500"
-            >
-              <option value="user">普通用户</option>
-              <option value="admin">管理员</option>
-            </select>
-            <button className="btn-primary" onClick={create} disabled={busy}>
-              {busy ? '创建中…' : '创建'}
-            </button>
-          </div>
-        </div>
-      )}
 
       <div className="overflow-hidden rounded-lg border border-slate-200">
         <table className="w-full text-sm">
@@ -249,50 +248,61 @@ function UsersCard({
                   </td>
                   <td className="py-2.5 text-xs text-slate-400">{formatTime(u.createdAt)}</td>
                   <td className="py-2.5 pr-3 text-right">
-                    <button
-                      onClick={() => {
-                        setResetId(resetId === u.id ? null : u.id);
-                        setResetPwd('');
-                      }}
-                      className="rounded-lg px-2 py-1 text-xs text-slate-500 hover:bg-slate-100"
-                    >
-                      重置密码
-                    </button>
-                    {u.banned ? (
-                      <button
-                        onClick={() => doUnban(u)}
-                        className="rounded-lg px-2 py-1 text-xs text-emerald-600 hover:bg-emerald-50"
-                      >
-                        解封
-                      </button>
-                    ) : (
+                    {can('users:edit') && (
                       <button
                         onClick={() => {
-                          setBanTarget(u);
-                          setBanReason('');
-                          setBanDuration(0);
+                          setResetId(resetId === u.id ? null : u.id);
+                          setResetPwd('');
                         }}
-                        disabled={u.username === current}
-                        className={`rounded-lg px-2 py-1 text-xs ${
-                          u.username === current
-                            ? 'cursor-not-allowed text-slate-300'
-                            : 'text-orange-600 hover:bg-orange-50'
-                        }`}
+                        className="rounded-lg px-2 py-1 text-xs text-slate-500 hover:bg-slate-100"
                       >
-                        封禁
+                        重置密码
                       </button>
                     )}
-                    <button
-                      onClick={() => setDelTarget(u)}
-                      disabled={u.username === current}
-                      className={`rounded-lg px-2 py-1 text-xs ${
-                        u.username === current
-                          ? 'cursor-not-allowed text-slate-300'
-                          : 'text-red-600 hover:bg-red-50'
-                      }`}
-                    >
-                      删除
-                    </button>
+                    {u.banned ? (
+                      can('users:ban') && (
+                        <button
+                          onClick={() => doUnban(u)}
+                          className="rounded-lg px-2 py-1 text-xs text-emerald-600 hover:bg-emerald-50"
+                        >
+                          解封
+                        </button>
+                      )
+                    ) : (
+                      can('users:ban') && (
+                        <button
+                          onClick={() => {
+                            setBanTarget(u);
+                            setBanReason('');
+                            setBanDuration(0);
+                          }}
+                          disabled={u.username === current}
+                          className={`rounded-lg px-2 py-1 text-xs ${
+                            u.username === current
+                              ? 'cursor-not-allowed text-slate-300'
+                              : 'text-orange-600 hover:bg-orange-50'
+                          }`}
+                        >
+                          封禁
+                        </button>
+                      )
+                    )}
+                    {can('users:permissions') && u.role === 'admin' && u.username !== current && (
+                      <button
+                        onClick={() => setPermTarget(u)}
+                        className="rounded-lg px-2 py-1 text-xs text-sky-600 hover:bg-sky-50"
+                      >
+                        权限
+                      </button>
+                    )}
+                    {can('users:delete') && u.username !== current && (
+                      <button
+                        onClick={() => setDelTarget(u)}
+                        className="rounded-lg px-2 py-1 text-xs text-red-600 hover:bg-red-50"
+                      >
+                        删除
+                      </button>
+                    )}
                   </td>
                 </tr>
                 {resetId === u.id && (
@@ -384,7 +394,140 @@ function UsersCard({
           onConfirm={() => doBan(banTarget)}
         />
       )}
+
+      {createOpen && (
+        <Modal title="新建账号" onClose={() => setCreateOpen(false)} footer={
+          <>
+            <button className="btn-outline" onClick={() => setCreateOpen(false)}>
+              取消
+            </button>
+            <button className="btn-primary" onClick={create} disabled={busy}>
+              {busy ? '创建中…' : '创建'}
+            </button>
+          </>
+        }>
+          <div className="space-y-3">
+            <div>
+              <label className="mb-1.5 block text-sm text-slate-600">账号</label>
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="2-24 个字符"
+                className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+              />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-sm text-slate-600">初始密码（≥6 位）</label>
+              <input
+                type="password"
+                value={pwd}
+                onChange={(e) => setPwd(e.target.value)}
+                placeholder="初始密码"
+                className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+              />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-sm text-slate-600">角色</label>
+              <select
+                value={role}
+                onChange={(e) => setRole(e.target.value as 'admin' | 'user')}
+                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-brand-500"
+              >
+                <option value="user">普通用户（无管理面板权限）</option>
+                <option value="admin">管理员</option>
+              </select>
+            </div>
+            {role === 'admin' && (
+              <div>
+                <p className="mb-2 text-sm font-medium text-slate-700">管理权限</p>
+                <PermissionPicker value={createPerms} onChange={setCreatePerms} />
+              </div>
+            )}
+          </div>
+        </Modal>
+      )}
+
+      {permTarget && (
+        <PermissionModal
+          user={permTarget}
+          onClose={() => setPermTarget(null)}
+          onSave={(perms) => savePerms({ ...permTarget, permissions: perms })}
+        />
+      )}
     </div>
+  );
+}
+
+/* ---------------- 权限勾选器 ---------------- */
+
+function PermissionPicker({
+  value,
+  onChange,
+}: {
+  value: PermissionKey[];
+  onChange: (next: PermissionKey[]) => void;
+}) {
+  const toggle = (k: PermissionKey) =>
+    onChange(value.includes(k) ? value.filter((x) => x !== k) : [...value, k]);
+
+  return (
+    <div className="space-y-4">
+      {PERMISSION_GROUPS.map((g) => (
+        <div key={g.group}>
+          <p className="mb-2 text-xs font-medium text-slate-500">{g.group}</p>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {g.items.map((it) => {
+              const checked = value.includes(it.key);
+              return (
+                <label
+                  key={it.key}
+                  className={`flex cursor-pointer items-start gap-2 rounded-lg border px-3 py-2 text-sm transition-colors ${
+                    checked ? 'border-brand-300 bg-brand-50/60' : 'border-slate-200 bg-white hover:bg-slate-50'
+                  }`}
+                >
+                  <input type="checkbox" checked={checked} onChange={() => toggle(it.key)} className="mt-0.5" />
+                  <span className="text-slate-700">{it.label}</span>
+                </label>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function PermissionModal({
+  user,
+  onClose,
+  onSave,
+}: {
+  user: UserItem;
+  onClose: () => void;
+  onSave: (perms: PermissionKey[]) => void;
+}) {
+  const [draft, setDraft] = useState<PermissionKey[]>(user.permissions ?? []);
+  return (
+    <Modal
+      title={`设置权限 · ${user.username}`}
+      onClose={onClose}
+      size="lg"
+      footer={
+        <>
+          <button className="btn-outline" onClick={onClose}>
+            取消
+          </button>
+          <button className="btn-primary" onClick={() => onSave(draft)}>
+            保存
+          </button>
+        </>
+      }
+    >
+      <p className="mb-3 text-xs text-slate-400">
+        勾选该管理员可在管理面板中访问的功能，未勾选的功能入口对其隐藏且无法操作；全部留空则无法进入管理面板。
+      </p>
+      <PermissionPicker value={draft} onChange={setDraft} />
+    </Modal>
   );
 }
 
@@ -396,17 +539,21 @@ export function SettingsTab({
   allowLogin,
   onReload,
   notify,
+  can,
 }: {
   user: string;
   allowRegister: boolean;
   allowLogin: boolean;
   onReload: () => void;
   notify: (t: string, ok?: boolean) => void;
+  can: (k: PermissionKey) => boolean;
 }) {
   return (
     <div className="max-w-3xl space-y-5">
-      <AccessCard allowRegister={allowRegister} allowLogin={allowLogin} onReload={onReload} notify={notify} />
-      <DangerZone user={user} notify={notify} onReload={onReload} />
+      {can('settings:access') && (
+        <AccessCard allowRegister={allowRegister} allowLogin={allowLogin} onReload={onReload} notify={notify} />
+      )}
+      {can('settings:clear') && <DangerZone user={user} notify={notify} onReload={onReload} />}
     </div>
   );
 }
