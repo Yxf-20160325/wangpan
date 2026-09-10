@@ -36,12 +36,13 @@
     ".next-build/types/**/*.ts",
     ".next-fresh/types/**/*.ts",
     ".next-origin2/types/**/*.ts",
+    ".next-perm/types/**/*.ts",
     ".next-run/types/**/*.ts",
     ".next-sess/types/**/*.ts",
     ".next-share/types/**/*.ts",
     ".next/types/**/*.ts",
     "next-env.d.ts",
-    ".next-perm/types/**/*.ts"
+    ".next-adminview/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

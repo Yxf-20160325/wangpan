@@ -95,6 +95,10 @@ export default function DiskApp({
   const [shareNode, setShareNode] = useState<FSNodeView | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; id: string | null } | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  // 管理员“查看他人文件”模式：null=查看自己的文件；否则为被查看的账号名（只读）
+  const [viewOwner, setViewOwner] = useState<string | null>(null);
+  const [accounts, setAccounts] = useState<string[]>([]);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const [toast, setToast] = useState<{ text: string; ok: boolean } | null>(null);
   const [stats, setStats] = useState({ fileCount: 0, folderCount: 0, totalSize: 0, used: 0, quota: 500 * 1024 * 1024, remaining: 500 * 1024 * 1024 });
 
@@ -116,6 +120,7 @@ export default function DiskApp({
     if (query) params.set('search', query);
     else if (filter !== 'all') params.set('all', '1');
     else if (currentId) params.set('parentId', currentId);
+    if (viewOwner) params.set('owner', viewOwner);
     params.set('sort', sortKey);
     params.set('dir', sortDir);
 
@@ -139,7 +144,38 @@ export default function DiskApp({
     return () => {
       alive = false;
     };
-  }, [currentId, query, filter, sortKey, sortDir, reloadKey, notify]);
+  }, [currentId, query, filter, sortKey, sortDir, reloadKey, viewOwner, notify]);
+
+  /* ---------- 管理员：查看他人文件 ---------- */
+  const openAccountPicker = async () => {
+    if (!accounts.length) {
+      try {
+        const r = await fetch('/api/admin/accounts');
+        const d = await r.json();
+        if (r.ok) setAccounts(d.accounts ?? []);
+      } catch {
+        /* ignore */
+      }
+    }
+    setPickerOpen((o) => !o);
+  };
+
+  const selectOwner = (name: string) => {
+    setViewOwner(name);
+    setCurrentId(null);
+    setQuery('');
+    setSearchInput('');
+    setFilter('all');
+    setPickerOpen(false);
+  };
+
+  const exitView = () => {
+    setViewOwner(null);
+    setCurrentId(null);
+    setQuery('');
+    setSearchInput('');
+    setFilter('all');
+  };
 
   const logout = async () => {
     await fetch('/api/auth/logout', { method: 'POST' }).catch(() => undefined);
@@ -265,11 +301,13 @@ export default function DiskApp({
   };
 
   const doShare = (node: FSNodeView) => {
+    if (viewOwner) return; // 只读模式禁止分享他人文件
     setShareNode(node);
   };
 
   /* ---------- 选择 ---------- */
   const onItemClick = (e: React.MouseEvent, node: FSNodeView, index: number) => {
+    if (viewOwner) return; // 只读模式不允许选择/操作
     if (e.metaKey || e.ctrlKey) {
       setSelected((s) => (s.includes(node.id) ? s.filter((x) => x !== node.id) : [...s, node.id]));
       lastIndexRef.current = index;
@@ -299,13 +337,17 @@ export default function DiskApp({
 
   const onContextMenu = (e: React.MouseEvent, node: FSNodeView | null) => {
     e.preventDefault();
+    if (viewOwner) return; // 只读模式不弹出操作菜单
     if (node && !selected.includes(node.id)) setSelected([node.id]);
     else if (!node) setSelected([]);
     setMenu({ x: e.clientX, y: e.clientY, id: node?.id ?? null });
   };
 
   useEffect(() => {
-    const close = () => setMenu(null);
+    const close = () => {
+      setMenu(null);
+      setPickerOpen(false);
+    };
     window.addEventListener('click', close);
     window.addEventListener('resize', close);
     window.addEventListener('scroll', close, true);
@@ -522,6 +564,31 @@ export default function DiskApp({
           </form>
 
           <div className="ml-auto flex items-center gap-1">
+            {role === 'admin' && !viewOwner && (
+              <div className="relative">
+                <button onClick={(e) => { e.stopPropagation(); openAccountPicker(); }} className="btn-ghost p-2" title="查看他人文件">
+                  <IconEye width={17} height={17} />
+                </button>
+                {pickerOpen && (
+                  <div className="absolute right-0 top-full z-50 mt-1 w-44 overflow-hidden rounded-xl border border-slate-200 bg-white py-1 shadow-pop anim-pop">
+                    {accounts.length === 0 ? (
+                      <p className="px-3 py-2 text-xs text-slate-400">暂无其他账号</p>
+                    ) : (
+                      accounts.map((a) => (
+                        <button
+                          key={a}
+                          onClick={(e) => { e.stopPropagation(); selectOwner(a); }}
+                          className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-100"
+                        >
+                          <IconUser width={14} height={14} className="shrink-0 text-slate-400" />
+                          <span className="truncate">{a}</span>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
             <button onClick={reload} className="btn-ghost p-2" title="刷新">
               <IconRefresh width={17} height={17} />
             </button>
@@ -543,6 +610,22 @@ export default function DiskApp({
             </div>
           </div>
         </header>
+
+        {/* 只读横幅（管理员查看他人文件时） */}
+        {role === 'admin' && viewOwner && (
+          <div className="flex items-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
+            <IconEye width={15} height={15} className="shrink-0" />
+            <span className="truncate">
+              你正在以管理员身份查看 <b className="font-semibold">{viewOwner}</b> 的文件（只读）
+            </span>
+            <button
+              onClick={exitView}
+              className="ml-auto shrink-0 rounded-md border border-amber-300 bg-white px-2.5 py-1 text-xs font-medium text-amber-700 hover:bg-amber-100"
+            >
+              退出查看
+            </button>
+          </div>
+        )}
 
         {/* 操作栏 */}
         <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 bg-white px-4 py-2.5">
@@ -577,12 +660,16 @@ export default function DiskApp({
             </>
           ) : (
             <>
-              <button className="btn-primary" onClick={() => fileInputRef.current?.click()}>
-                <IconUpload width={16} height={16} /> 上传文件
-              </button>
-              <button className="btn-outline" onClick={() => setDialog({ type: 'newFolder' })}>
-                <IconFolderPlus width={16} height={16} /> 新建文件夹
-              </button>
+              {!viewOwner && (
+                <>
+                  <button className="btn-primary" onClick={() => fileInputRef.current?.click()}>
+                    <IconUpload width={16} height={16} /> 上传文件
+                  </button>
+                  <button className="btn-outline" onClick={() => setDialog({ type: 'newFolder' })}>
+                    <IconFolderPlus width={16} height={16} /> 新建文件夹
+                  </button>
+                </>
+              )}
               <div className="ml-auto flex items-center gap-1">
                 <IconSort width={15} height={15} className="text-slate-400" />
                 <select
@@ -666,6 +753,7 @@ export default function DiskApp({
                   onDownload={() => download(n)}
                   onPreview={() => setPreview(n)}
                   onShare={() => doShare(n)}
+                  readOnly={!!viewOwner}
                 />
               ))}
             </div>
@@ -691,6 +779,7 @@ export default function DiskApp({
                   onDownload={() => download(n)}
                   onPreview={() => setPreview(n)}
                   onShare={() => doShare(n)}
+                  readOnly={!!viewOwner}
                 />
               ))}
             </div>
@@ -885,6 +974,7 @@ function GridItem({
   onDownload,
   onPreview,
   onShare,
+  readOnly,
 }: {
   node: FSNodeView;
   active: boolean;
@@ -894,6 +984,7 @@ function GridItem({
   onDownload: () => void;
   onPreview: () => void;
   onShare: () => void;
+  readOnly?: boolean;
 }) {
   const kind = kindOf(node.name, node.type);
   const previewable = node.type === 'file' && canPreview(kind);
@@ -930,16 +1021,18 @@ function GridItem({
             <IconEye width={14} height={14} />
           </button>
         )}
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onShare();
-          }}
-          className="rounded-lg bg-white/90 p-1.5 text-slate-500 shadow-sm ring-1 ring-slate-200 hover:text-brand-600"
-          title="分享"
-        >
-          <IconShare width={14} height={14} />
-        </button>
+        {!readOnly && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onShare();
+            }}
+            className="rounded-lg bg-white/90 p-1.5 text-slate-500 shadow-sm ring-1 ring-slate-200 hover:text-brand-600"
+            title="分享"
+          >
+            <IconShare width={14} height={14} />
+          </button>
+        )}
         <button
           onClick={(e) => {
             e.stopPropagation();
@@ -964,6 +1057,7 @@ function ListRow({
   onDownload,
   onPreview,
   onShare,
+  readOnly,
 }: {
   node: FSNodeView;
   active: boolean;
@@ -973,6 +1067,7 @@ function ListRow({
   onDownload: () => void;
   onPreview: () => void;
   onShare: () => void;
+  readOnly?: boolean;
 }) {
   const kind = kindOf(node.name, node.type);
   const previewable = node.type === 'file' && canPreview(kind);
@@ -1006,16 +1101,18 @@ function ListRow({
             <IconEye width={15} height={15} />
           </button>
         )}
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onShare();
-          }}
-          className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-brand-600"
-          title="分享"
-        >
-          <IconShare width={15} height={15} />
-        </button>
+        {!readOnly && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onShare();
+            }}
+            className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-brand-600"
+            title="分享"
+          >
+            <IconShare width={15} height={15} />
+          </button>
+        )}
         <button
           onClick={(e) => {
             e.stopPropagation();

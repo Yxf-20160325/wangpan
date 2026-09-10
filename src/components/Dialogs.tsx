@@ -3,7 +3,19 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { IconChevronRight, IconFolder, IconHome, IconX } from './Icons';
 
-function Shell({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+function Shell({
+  title,
+  onClose,
+  children,
+  footer,
+  wide,
+}: {
+  title: string;
+  onClose: () => void;
+  children: React.ReactNode;
+  footer?: React.ReactNode;
+  wide?: boolean;
+}) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     window.addEventListener('keydown', onKey);
@@ -13,16 +25,17 @@ function Shell({ title, onClose, children }: { title: string; onClose: () => voi
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/40 p-4 anim-fade" onClick={onClose}>
       <div
-        className="w-full max-w-md rounded-2xl bg-white p-5 shadow-pop anim-pop"
+        className={`flex max-h-[90vh] w-full flex-col rounded-2xl bg-white shadow-pop anim-pop ${wide ? 'max-w-2xl' : 'max-w-md'}`}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="mb-4 flex items-center justify-between">
+        <div className="flex shrink-0 items-center justify-between border-b border-slate-100 px-5 py-3.5">
           <h3 className="text-[15px] font-semibold text-slate-900">{title}</h3>
           <button onClick={onClose} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600">
             <IconX width={16} height={16} />
           </button>
         </div>
-        {children}
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">{children}</div>
+        {footer && <div className="flex shrink-0 justify-end gap-2 border-t border-slate-100 px-5 py-3.5">{footer}</div>}
       </div>
     </div>
   );
@@ -42,9 +55,8 @@ export function Modal({
   size?: 'md' | 'lg';
 }) {
   return (
-    <Shell title={title} onClose={onClose}>
-      <div className={size === 'lg' ? 'max-h-[70vh] overflow-auto' : ''}>{children}</div>
-      {footer && <div className="mt-5 flex justify-end gap-2">{footer}</div>}
+    <Shell title={title} onClose={onClose} footer={footer} wide={size === 'lg'}>
+      {children}
     </Shell>
   );
 }

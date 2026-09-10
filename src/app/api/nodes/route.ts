@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createFolder, folderStats, getPath, readDb, sortNodes } from '@/lib/store';
-import { currentSession, guardApi } from '@/lib/auth';
+import { currentSession, guardApi, listUsers } from '@/lib/auth';
 import { appendLog } from '@/lib/log';
 import type { ApiListResult, FSNodeView, SortDir, SortKey } from '@/lib/types';
 
@@ -14,11 +14,24 @@ export async function GET(req: NextRequest) {
 
   const session = await currentSession();
   if (!session) return NextResponse.json({ error: '未登录或会话已失效' }, { status: 401 });
-  // 普通用户只看自己的文件；管理员可见全部
   const isAdmin = session.role === 'admin';
-  const scope = (nodes: typeof db.nodes) => (isAdmin ? nodes : nodes.filter((n) => n.owner === session.username));
 
   const { searchParams } = new URL(req.url);
+  const ownerParam = searchParams.get('owner');
+
+  // 普通用户始终只看自己的文件；管理员可通过 ?owner=其他账号 临时查看他人文件
+  // （主页面“查看他人文件”功能）。owner 参数对普通用户一律忽略。
+  let scopeOwner: string;
+  if (isAdmin && ownerParam && ownerParam !== session.username) {
+    const users = await listUsers();
+    if (!users.some((u) => u.username === ownerParam)) {
+      return NextResponse.json({ error: '账号不存在' }, { status: 404 });
+    }
+    scopeOwner = ownerParam;
+  } else {
+    scopeOwner = session.username;
+  }
+
   const parentId = searchParams.get('parentId') || null;
   const search = (searchParams.get('search') || '').trim();
   const sort = (SORT_KEYS.includes(searchParams.get('sort') as SortKey) ? searchParams.get('sort') : 'name') as SortKey;
@@ -26,7 +39,7 @@ export async function GET(req: NextRequest) {
   const all = searchParams.get('all') === '1';
 
   const db = await readDb();
-  const accessible = scope(db.nodes);
+  const accessible = db.nodes.filter((n) => n.owner === scopeOwner);
 
   let matched;
   if (search) {

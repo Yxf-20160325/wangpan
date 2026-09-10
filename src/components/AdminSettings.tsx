@@ -396,7 +396,7 @@ function UsersCard({
       )}
 
       {createOpen && (
-        <Modal title="新建账号" onClose={() => setCreateOpen(false)} footer={
+        <Modal title="新建账号" onClose={() => setCreateOpen(false)} size="lg" footer={
           <>
             <button className="btn-outline" onClick={() => setCreateOpen(false)}>
               取消
