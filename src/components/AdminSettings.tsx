@@ -406,7 +406,6 @@ export function SettingsTab({
   return (
     <div className="max-w-3xl space-y-5">
       <AccessCard allowRegister={allowRegister} allowLogin={allowLogin} onReload={onReload} notify={notify} />
-      <MyAccountCard user={user} notify={notify} />
       <DangerZone user={user} notify={notify} onReload={onReload} />
     </div>
   );
@@ -514,99 +513,6 @@ function AccessCard({
           onConfirm={confirmDisable}
         />
       )}
-    </div>
-  );
-}
-
-/* ---------------- 我的账号 ---------------- */
-
-function MyAccountCard({ user, notify }: { user: string; notify: (t: string, ok?: boolean) => void }) {
-  const [username, setUsername] = useState(user);
-  const [current, setCurrent] = useState('');
-  const [next, setNext] = useState('');
-  const [next2, setNext2] = useState('');
-  const [saving, setSaving] = useState(false);
-
-  const save = async () => {
-    if (!current) return notify('请输入当前密码', false);
-    if (next && next !== next2) return notify('两次输入的新密码不一致', false);
-    if (username.trim().length < 2) return notify('账号至少需要 2 个字符', false);
-    setSaving(true);
-    try {
-      const res = await api('/api/admin/settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'account',
-          currentPassword: current,
-          username: username.trim(),
-          password: next || undefined,
-        }),
-      });
-      const d = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        notify(d.error || '保存失败', false);
-        return;
-      }
-      notify('已保存，即将退出并重新登录');
-      window.setTimeout(async () => {
-        await fetch('/api/auth/logout', { method: 'POST' });
-        window.location.href = '/login';
-      }, 1300);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div className="card p-5">
-      <h2 className="mb-1 text-sm font-semibold text-slate-800">我的账号</h2>
-      <p className="mb-4 text-xs text-slate-400">修改账号或密码后需要重新登录</p>
-
-      <div className="space-y-3">
-        <div>
-          <label className="mb-1.5 block text-sm text-slate-600">账号</label>
-          <input
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
-          />
-        </div>
-        <div>
-          <label className="mb-1.5 block text-sm text-slate-600">当前密码</label>
-          <input
-            type="password"
-            value={current}
-            onChange={(e) => setCurrent(e.target.value)}
-            placeholder="验证身份用"
-            className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
-          />
-        </div>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div>
-            <label className="mb-1.5 block text-sm text-slate-600">新密码（留空则不改）</label>
-            <input
-              type="password"
-              value={next}
-              onChange={(e) => setNext(e.target.value)}
-              className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
-            />
-          </div>
-          <div>
-            <label className="mb-1.5 block text-sm text-slate-600">确认新密码</label>
-            <input
-              type="password"
-              value={next2}
-              onChange={(e) => setNext2(e.target.value)}
-              className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
-            />
-          </div>
-        </div>
-      </div>
-
-      <button className="btn-primary mt-4" onClick={save} disabled={saving}>
-        {saving ? '保存中…' : '保存修改'}
-      </button>
     </div>
   );
 }
