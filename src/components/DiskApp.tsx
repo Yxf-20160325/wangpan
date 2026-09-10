@@ -127,7 +127,8 @@ export default function DiskApp({
     fetch(`/api/nodes?${params.toString()}`)
       .then((r) => {
         if (r.status === 401) {
-          window.location.href = '/login';
+          // 会话失效/被踢：先清除 cookie 再跳转登录页，避免 token 仍有效时 middleware 把 /login 弹回 / 造成循环
+          void logout();
           throw new Error('UNAUTHORIZED');
         }
         return r.json();
